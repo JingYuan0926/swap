@@ -1,3 +1,4 @@
 {
-  "SmartWalletModule#SmartWalletFactory": "0x214048ed98230e586f649a495653F78DE9b1d97e"
+  "SmartWalletModule#SmartWalletFactory": "0x214048ed98230e586f649a495653F78DE9b1d97e",
+  "PaymasterModule#CustomPaymaster": "0xCC8768f032A4098eA4d53C71BE124F7e86a0913d"
 }

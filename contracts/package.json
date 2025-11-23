@@ -11,6 +11,7 @@
     "deploy:all": "npm run deploy:base && npm run deploy:sepolia && npm run deploy:arbitrum"
   },
   "dependencies": {
+    "@account-abstraction/contracts": "^0.7.0",
     "dotenv": "^16.6.1"
   },
   "devDependencies": {

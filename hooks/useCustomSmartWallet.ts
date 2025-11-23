@@ -7,8 +7,13 @@ import {
   getSmartWalletAddress,
   isSmartWalletDeployed,
 } from '@/lib/custom-wallet-client';
-import { CUSTOM_WALLET_CHAINS, FACTORY_ADDRESSES } from '@/lib/custom-wallet-config';
+import { CUSTOM_WALLET_CHAINS, FACTORY_ADDRESSES, ENTRYPOINT_ADDRESS } from '@/lib/custom-wallet-config';
 import SmartWalletABI from '@/lib/contracts/CustomSmartWallet.json';
+import {
+  buildExecuteBatchCallData,
+  buildUserOp,
+  getUserOpHash,
+} from '@/lib/userop-builder';
 
 export interface BatchCall {
   to: Address;
@@ -200,6 +205,119 @@ export function useCustomSmartWallet() {
     [executeBatch]
   );
 
+  /**
+   * Send ETH batch transaction using paymaster (GASLESS!)
+   * This builds a UserOperation and submits it to EntryPoint
+   */
+  const sendEthBatchGasless = useCallback(
+    async (chainId: number, recipients: Array<{ to: Address; amount: string }>) => {
+      if (!smartWalletAddress || !walletClient || !publicClient || !eoaAddress) {
+        throw new Error('Smart wallet not initialized');
+      }
+
+      if (!isDeployed[chainId]) {
+        throw new Error('Smart wallet not deployed on this chain. Deploy it first!');
+      }
+
+      // 1. Build the calls
+      const calls: BatchCall[] = recipients.map(({ to, amount }) => ({
+        to,
+        value: parseEther(amount),
+        data: '0x' as Hex,
+      }));
+
+      // 2. Build callData for the smart wallet
+      const callData = buildExecuteBatchCallData(calls);
+
+      // 3. Get nonce from EntryPoint (ERC-4337 v0.7)
+      const nonce = await publicClient.readContract({
+        address: ENTRYPOINT_ADDRESS as Address,
+        abi: [
+          {
+            name: 'getNonce',
+            type: 'function',
+            stateMutability: 'view',
+            inputs: [
+              { name: 'sender', type: 'address' },
+              { name: 'key', type: 'uint192' },
+            ],
+            outputs: [{ name: 'nonce', type: 'uint256' }],
+          },
+        ],
+        functionName: 'getNonce',
+        args: [smartWalletAddress, 0n], // key = 0 for default nonce sequence
+      }) as bigint;
+
+      // 4. Get current gas prices
+      const gasPrice = await publicClient.getGasPrice();
+      const maxFeePerGas = gasPrice * 2n; // 2x for safety
+      const maxPriorityFeePerGas = gasPrice / 10n; // 10% tip
+
+      // 5. Build UserOperation with paymaster
+      const userOp = buildUserOp({
+        sender: smartWalletAddress,
+        nonce,
+        callData,
+        chainId,
+        maxFeePerGas,
+        maxPriorityFeePerGas,
+        usePaymaster: true, // This adds paymaster data
+      });
+
+      // 6. Get the hash to sign
+      const userOpHash = getUserOpHash(userOp, chainId);
+
+      // 7. Sign the hash with the EOA (smart wallet owner)
+      const signature = await walletClient.signMessage({
+        account: eoaAddress,
+        message: { raw: userOpHash },
+      });
+
+      // 8. Add signature to UserOp
+      userOp.signature = signature;
+
+      // 9. Submit to EntryPoint via handleOps
+      // Note: In production, you'd submit to a bundler instead
+      const hash = await walletClient.writeContract({
+        address: ENTRYPOINT_ADDRESS as Address,
+        abi: [
+          {
+            name: 'handleOps',
+            type: 'function',
+            stateMutability: 'nonpayable',
+            inputs: [
+              {
+                name: 'ops',
+                type: 'tuple[]',
+                components: [
+                  { name: 'sender', type: 'address' },
+                  { name: 'nonce', type: 'uint256' },
+                  { name: 'initCode', type: 'bytes' },
+                  { name: 'callData', type: 'bytes' },
+                  { name: 'accountGasLimits', type: 'bytes32' },
+                  { name: 'preVerificationGas', type: 'uint256' },
+                  { name: 'gasFees', type: 'bytes32' },
+                  { name: 'paymasterAndData', type: 'bytes' },
+                  { name: 'signature', type: 'bytes' },
+                ],
+              },
+              { name: 'beneficiary', type: 'address' },
+            ],
+            outputs: [],
+          },
+        ],
+        functionName: 'handleOps',
+        args: [[userOp], eoaAddress], // beneficiary = your EOA
+      });
+
+      // 10. Wait for transaction
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+      return { hash, receipt, userOpHash };
+    },
+    [smartWalletAddress, walletClient, publicClient, eoaAddress, isDeployed]
+  );
+
   return {
     // State
     smartWalletAddress,
@@ -215,6 +333,7 @@ export function useCustomSmartWallet() {
     executeSingle,
     sendEth,
     sendEthBatch,
+    sendEthBatchGasless, // NEW: Gasless transactions with paymaster!
 
     // Helper
     allChainsDeployed: Object.keys(isDeployed).length === CUSTOM_WALLET_CHAINS.length &&

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import "@account-abstraction/contracts/interfaces/IAccount.sol";
+import "@account-abstraction/contracts/interfaces/PackedUserOperation.sol";
+
 /**
  * @title CustomSmartWallet
- * @notice ERC-4337 compliant smart wallet with batch transaction support
+ * @notice ERC-4337 v0.7 compliant smart wallet with batch transaction support
  * @dev Controlled by an ECDSA owner (your MetaMask wallet)
  */
-contract CustomSmartWallet {
+contract CustomSmartWallet is IAccount {
     // ERC-4337 EntryPoint
     address public immutable entryPoint;
 
@@ -69,11 +72,11 @@ contract CustomSmartWallet {
     }
 
     /**
-     * @notice Validate user operation signature (ERC-4337)
-     * @dev Called by EntryPoint to validate the UserOperation
+     * @notice Validate user operation signature (ERC-4337 v0.7)
+     * @dev Called by EntryPoint to validate the PackedUserOperation
      */
     function validateUserOp(
-        UserOperation calldata userOp,
+        PackedUserOperation calldata userOp,
         bytes32 userOpHash,
         uint256 missingAccountFunds
     ) external onlyEntryPoint returns (uint256 validationData) {
@@ -171,21 +174,6 @@ contract CustomSmartWallet {
      * @notice Fallback function
      */
     fallback() external payable {}
-}
-
-// UserOperation struct for ERC-4337
-struct UserOperation {
-    address sender;
-    uint256 nonce;
-    bytes initCode;
-    bytes callData;
-    uint256 callGasLimit;
-    uint256 verificationGasLimit;
-    uint256 preVerificationGas;
-    uint256 maxFeePerGas;
-    uint256 maxPriorityFeePerGas;
-    bytes paymasterAndData;
-    bytes signature;
 }
 
 // Helper library for ECDSA signature verification

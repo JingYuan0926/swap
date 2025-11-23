@@ -16,6 +16,7 @@ export default function CustomWalletDemo() {
     error,
     deployWallet,
     sendEthBatch,
+    sendEthBatchGasless,
   } = useCustomSmartWallet();
 
   const chainId = useChainId();
@@ -112,6 +113,61 @@ export default function CustomWalletDemo() {
 
     } catch (err) {
       console.error('Batch transaction error:', err);
+      setStatus('Error: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      setResults([{
+        chain: 'Base Sepolia',
+        error: err instanceof Error ? err.message : 'Unknown error',
+        status: 'failed',
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const executeGaslessTransaction = async () => {
+    if (!smartWalletAddress) {
+      alert('Smart wallet not initialized');
+      return;
+    }
+
+    if (!isOnCorrectChain) {
+      alert('Please switch to Base Sepolia network first');
+      return;
+    }
+
+    if (!isDeployed[TARGET_CHAIN_ID]) {
+      alert('Smart wallet not deployed yet! Deploy it first with the button above.');
+      return;
+    }
+
+    setLoading(true);
+    setResults([]);
+
+    try {
+      // Example: Send ETH to 3 different addresses in one gasless transaction
+      const recipients = [
+        { to: RECIPIENT, amount: AMOUNT },
+        { to: RECIPIENT, amount: AMOUNT },
+        { to: RECIPIENT, amount: AMOUNT },
+      ];
+
+      // Execute GASLESS transaction via paymaster!
+      setStatus('Building UserOperation with paymaster...');
+
+      const { hash, receipt, userOpHash } = await sendEthBatchGasless(TARGET_CHAIN_ID, recipients);
+
+      setStatus('Gasless transaction successful!');
+      setResults([{
+        chain: 'Base Sepolia',
+        hash,
+        userOpHash,
+        status: 'success',
+        explorer: `https://sepolia.basescan.org/tx/${hash}`,
+        message: '🎉 GASLESS! The paymaster paid all gas fees!',
+      }]);
+
+    } catch (err) {
+      console.error('Gasless transaction error:', err);
       setStatus('Error: ' + (err instanceof Error ? err.message : 'Unknown error'));
       setResults([{
         chain: 'Base Sepolia',
@@ -221,6 +277,41 @@ export default function CustomWalletDemo() {
               ? 'Initializing...'
               : 'Execute Batch Transaction'}
           </button>
+
+          {/* Gasless Transaction Button */}
+          <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-300 p-4 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl">⚡</span>
+              <h3 className="font-bold text-purple-900">Gasless Transaction (Paymaster Sponsored!)</h3>
+            </div>
+            <p className="text-sm text-purple-800 mb-3">
+              Same batch transaction, but the paymaster pays ALL gas fees!
+            </p>
+            <button
+              onClick={executeGaslessTransaction}
+              disabled={loading || isLoading || !smartWalletAddress || !isOnCorrectChain || !isDeployed[TARGET_CHAIN_ID]}
+              className={`w-full py-3 px-6 rounded-lg font-semibold text-white transition-colors
+                ${loading || isLoading || !smartWalletAddress || !isOnCorrectChain || !isDeployed[TARGET_CHAIN_ID]
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700'
+                }`}
+            >
+              {!isOnCorrectChain
+                ? 'Switch to Base Sepolia First'
+                : !isDeployed[TARGET_CHAIN_ID]
+                ? 'Deploy Wallet First (Button Above)'
+                : loading
+                ? status
+                : isLoading
+                ? 'Initializing...'
+                : '⚡ Execute GASLESS Batch Transaction'}
+            </button>
+            {isDeployed[TARGET_CHAIN_ID] && (
+              <p className="text-xs text-purple-700 mt-2 text-center">
+                💡 Your EOA signs the UserOp, paymaster sponsors the gas!
+              </p>
+            )}
+          </div>
 
           {/* Results */}
           {results.length > 0 && (
