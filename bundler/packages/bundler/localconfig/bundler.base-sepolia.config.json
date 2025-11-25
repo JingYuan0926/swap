@@ -1,0 +1,23 @@
+{
+  "chainId": 84532,
+  "gasFactor": "1",
+  "port": "4337",
+  "privateApiPort": "4338",
+  "network": "https://sepolia-preconf.base.org",
+  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+  "beneficiary": "0x9787cfF89D30bB6Ae87Aaad9B3a02E77B5caA8f1",
+  "minBalance": "0.1",
+  "mnemonic": "./localconfig/mnemonic.txt",
+  "maxBundleGas": 5e6,
+  "minStake": "1000000000000000",
+  "minUnstakeDelay": 0,
+  "autoBundleInterval": 3,
+  "autoBundleMempoolSize": 1,
+  "unsafe": true,
+  "paymasterAddresses": [
+    "0x93EbD2447D409eEAbf01C86d665eaCAa32996c85"
+  ],
+  "factoryAddresses": [
+    "0x90da4b4B5DeC86d0059eC0161fB269B9d56C334F"
+  ]
+}

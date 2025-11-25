@@ -47,3 +47,6 @@ export const getBundlerUrl = (chainId: number) => {
   const projectId = ZERODEV_PROJECT_IDS[chainId as keyof typeof ZERODEV_PROJECT_IDS];
   return `https://rpc.zerodev.app/api/v3/${projectId}/chain/${chainId}`;
 };
+
+// Local Bundler URL
+export const LOCAL_BUNDLER_URL = process.env.NEXT_PUBLIC_BUNDLER_URL || "http://localhost:4337/rpc";

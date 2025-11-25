@@ -7,7 +7,7 @@ import {
   getSmartWalletAddress,
   isSmartWalletDeployed,
 } from '@/lib/custom-wallet-client';
-import { CUSTOM_WALLET_CHAINS, FACTORY_ADDRESSES, ENTRYPOINT_ADDRESS } from '@/lib/custom-wallet-config';
+import { CUSTOM_WALLET_CHAINS, FACTORY_ADDRESSES, ENTRYPOINT_ADDRESS, LOCAL_BUNDLER_URL } from '@/lib/custom-wallet-config';
 import SmartWalletABI from '@/lib/contracts/CustomSmartWallet.json';
 import {
   buildExecuteBatchCallData,
@@ -254,6 +254,9 @@ export function useCustomSmartWallet() {
       const maxPriorityFeePerGas = gasPrice / 10n; // 10% tip
 
       // 5. Build UserOperation with paymaster
+      const verificationGasLimit = 200000n;
+      const callGasLimit = 200000n;
+
       const userOp = buildUserOp({
         sender: smartWalletAddress,
         nonce,
@@ -261,6 +264,8 @@ export function useCustomSmartWallet() {
         chainId,
         maxFeePerGas,
         maxPriorityFeePerGas,
+        verificationGasLimit,
+        callGasLimit,
         usePaymaster: true, // This adds paymaster data
       });
 
@@ -276,44 +281,89 @@ export function useCustomSmartWallet() {
       // 8. Add signature to UserOp
       userOp.signature = signature;
 
-      // 9. Submit to EntryPoint via handleOps
-      // Note: In production, you'd submit to a bundler instead
-      const hash = await walletClient.writeContract({
-        address: ENTRYPOINT_ADDRESS as Address,
-        abi: [
-          {
-            name: 'handleOps',
-            type: 'function',
-            stateMutability: 'nonpayable',
-            inputs: [
-              {
-                name: 'ops',
-                type: 'tuple[]',
-                components: [
-                  { name: 'sender', type: 'address' },
-                  { name: 'nonce', type: 'uint256' },
-                  { name: 'initCode', type: 'bytes' },
-                  { name: 'callData', type: 'bytes' },
-                  { name: 'accountGasLimits', type: 'bytes32' },
-                  { name: 'preVerificationGas', type: 'uint256' },
-                  { name: 'gasFees', type: 'bytes32' },
-                  { name: 'paymasterAndData', type: 'bytes' },
-                  { name: 'signature', type: 'bytes' },
-                ],
-              },
-              { name: 'beneficiary', type: 'address' },
-            ],
-            outputs: [],
-          },
-        ],
-        functionName: 'handleOps',
-        args: [[userOp], eoaAddress], // beneficiary = your EOA
+      // 9. Submit to Local Bundler via eth_sendUserOperation
+      // This replaces the direct EntryPoint call, so the user only signs once!
+      const bundlerResponse = await fetch(LOCAL_BUNDLER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'eth_sendUserOperation',
+          params: [
+            {
+              sender: userOp.sender,
+              nonce: "0x" + userOp.nonce.toString(16),
+              initCode: userOp.initCode,
+              callData: userOp.callData,
+              accountGasLimits: userOp.accountGasLimits,
+              preVerificationGas: "0x" + userOp.preVerificationGas.toString(16),
+              gasFees: userOp.gasFees,
+              paymasterAndData: userOp.paymasterAndData,
+              signature: userOp.signature,
+              // Unpacked fields required by some bundlers (even for v0.7)
+              verificationGasLimit: "0x" + verificationGasLimit.toString(16),
+              callGasLimit: "0x" + callGasLimit.toString(16),
+              maxFeePerGas: "0x" + maxFeePerGas.toString(16),
+              maxPriorityFeePerGas: "0x" + maxPriorityFeePerGas.toString(16),
+              // Unpacked Paymaster fields
+              paymaster: userOp.paymasterAndData.slice(0, 42) as Address, // First 20 bytes (40 chars + 0x)
+              paymasterVerificationGasLimit: "0x" + BigInt("0x" + userOp.paymasterAndData.slice(42, 74)).toString(16), // Next 16 bytes (32 chars)
+              paymasterPostOpGasLimit: "0x" + BigInt("0x" + userOp.paymasterAndData.slice(74, 106)).toString(16), // Next 16 bytes (32 chars)
+              paymasterData: "0x" + userOp.paymasterAndData.slice(106), // The rest
+            },
+            ENTRYPOINT_ADDRESS,
+          ],
+        }),
       });
 
-      // 10. Wait for transaction
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const bundlerResult = await bundlerResponse.json();
+      if (bundlerResult.error) {
+        throw new Error(`Bundler error: ${bundlerResult.error.message}`);
+      }
 
-      return { hash, receipt, userOpHash };
+      const returnedUserOpHash = bundlerResult.result;
+      console.log('UserOp submitted to bundler:', returnedUserOpHash);
+
+      // 10. Wait for receipt (polling the bundler or public client)
+      // We need the transaction hash, which we can get from eth_getUserOperationReceipt
+      let retries = 0;
+      let receipt = null;
+      let txHash: Hex | null = null;
+
+      while (retries < 30) { // Poll for ~30-60 seconds
+        await new Promise(r => setTimeout(r, 2000)); // Wait 2s
+
+        const receiptResponse = await fetch(LOCAL_BUNDLER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'eth_getUserOperationReceipt',
+            params: [returnedUserOpHash],
+          }),
+        });
+
+        const receiptResult = await receiptResponse.json();
+        console.log('Polling receipt result:', receiptResult);
+
+        if (receiptResult.result) {
+          console.log('Found receipt in bundler:', receiptResult.result);
+          // The bundler returns the full receipt, so we can use it directly!
+          // This is faster than waiting for publicClient again, especially if cached.
+          receipt = receiptResult.result.receipt;
+          txHash = receipt.transactionHash;
+          break;
+        }
+        retries++;
+      }
+
+      if (!receipt || !txHash) {
+        throw new Error('Timed out waiting for UserOperation receipt');
+      }
+
+      return { hash: txHash, receipt, userOpHash: returnedUserOpHash };
     },
     [smartWalletAddress, walletClient, publicClient, eoaAddress, isDeployed]
   );

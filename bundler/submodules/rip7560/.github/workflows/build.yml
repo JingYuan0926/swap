@@ -1,0 +1,34 @@
+name: Build
+on:
+  push:
+    branches:
+      - '*'
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+env:
+  FORCE_COLORS: 1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/setup-node@v1
+        with:
+          node-version: '18'
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: actions/checkout@v2
+        with:
+          submodules: 'true'
+      - uses: actions/cache@v2
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+      - run: yarn install
+      - run: yarn run ci
+
+
