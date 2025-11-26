@@ -273,6 +273,92 @@ function createWallet(address owner, bytes32 salt) public returns (address walle
 
 ---
 
+### 5. Bundler (The Relayer)
+
+**Location**: `packages/bundler`
+**Beneficiary Address**: `0x9787cfF89D30bB6Ae87Aaad9B3a02E77B5caA8f1` (Receives gas refunds)
+**Signer Address**: `0x4E3D79046314e7Ed6e8B782cA7A50E58569410bB` (Signs transactions, pays gas initially)
+
+The **Bundler** is a specialized node that listens for UserOperations, validates them, and relays them to the blockchain. It acts as the "miner" for Account Abstraction, ensuring that UserOps are valid before submitting them to the EntryPoint.
+
+#### Key Code Sections:
+
+##### a) Bundle Management (`BundleManager.ts`)
+This is the core logic that decides when and what to bundle.
+
+```typescript
+// packages/bundler/src/modules/BundleManager.ts
+
+async sendNextBundle(): Promise<SendBundleReturn | undefined> {
+  // 1. Check if we have enough UserOps (autoBundleMempoolSize)
+  // 2. Create a bundle (array of UserOps)
+  const [bundle] = await this.createBundle(0, 0, 0);
+  
+  // 3. Submit to EntryPoint
+  const ret = await this.sendBundle(bundle, [], beneficiary, storageMap);
+  
+  // 4. Cache tx hash for instant receipt lookup
+  for (const userOpHash of hashes) {
+    this.userOpToTxHash.set(userOpHash, ret.transactionHash);
+  }
+}
+```
+
+##### b) Validation (`MethodHandlerERC4337.ts`)
+Before accepting a UserOp, the bundler simulates it off-chain to ensure it won't revert (which would cost the bundler gas).
+
+```typescript
+// packages/bundler/src/MethodHandlerERC4337.ts
+
+async _validateParameters(userOp, entryPointInput) {
+  // 1. Check basic fields (sender, nonce, etc.)
+  // 2. Simulate validation on-chain (eth_call)
+  // 3. Check if paymaster has enough deposit
+  // 4. Check if sender has enough stake (if required)
+}
+```
+
+#### Configuration Deep Dive:
+
+The bundler is configured via `localconfig/bundler.base-sepolia.config.json`. Here's what the settings mean:
+
+```json
+{
+  "network": "https://sepolia-preconf.base.org",  // RPC Endpoint
+  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+  "beneficiary": "0x9787cfF89D30bB6Ae87Aaad9B3a02E77B5caA8f1", // Your EOA
+  "minBalance": "0.1",           // Minimum ETH signer needs
+  "autoBundleMempoolSize": 1,    // CRITICAL: Send bundle immediately (1 UserOp)
+  "autoBundleInterval": 3,       // Check mempool every 3 seconds
+  "unsafe": true,                // Allow local debugging/bypass some checks
+  "paymasterAddresses": ["0x93EbD2..."], // Whitelisted paymasters
+  "mnemonic": "./localconfig/mnemonic.txt" // Signer's private key source
+}
+```
+
+- **`autoBundleMempoolSize: 1`**: We set this to 1 for testing so transactions send immediately. In production, you might set this higher (e.g., 10) to batch more UserOps and save gas.
+- **`beneficiary`**: This address receives the "profit" (unused gas) from the EntryPoint.
+- **`unsafe: true`**: Disables some strict ERC-4337 checks (like storage rules) which is useful for testing on testnets.
+
+#### Running the Bundler:
+
+To start the bundler service:
+
+```bash
+cd packages/bundler
+node ../../node_modules/ts-node/dist/bin.js ./src/exec.ts --config ./localconfig/bundler.base-sepolia.config.json
+```
+
+**What happens when it runs:**
+1. Connects to Base Sepolia RPC.
+2. Loads your EOA signer from `mnemonic.txt`.
+3. Starts an RPC server at `http://localhost:4337`.
+4. Polls the mempool every 3 seconds (`autoBundleInterval`).
+5. When a UserOp arrives, it validates it, bundles it, and sends the transaction.
+6. It caches the transaction hash so your frontend gets an instant receipt.
+
+---
+
 ## Transaction Flow
 
 ### Gasless Batch Transaction (Step-by-Step)
